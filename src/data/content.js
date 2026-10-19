@@ -1,6 +1,6 @@
 export const NAV_LINKS = [
-  { label: 'Proyek', href: '#projects' },
   { label: 'Tentang Saya', href: '#about' },
+  { label: 'Proyek', href: '#projects' },
   { label: 'Pengalaman', href: '#experience' },
   { label: 'Keterampilan', href: '#skills' },
   { label: 'Pencapaian', href: '#achievements' },
