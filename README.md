@@ -1,35 +1,28 @@
-# React + Vite
+# Portfolio
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite portfolio site. Dynamic project, experience, and achievement content is read from Supabase. The `/admin` route requires a Supabase Auth account explicitly allowlisted as an administrator; public sign-up is not part of the app.
 
-Currently, two official plugins are available:
+## Local setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Install a Node.js version supported by the Vite version in `package-lock.json`.
+2. Copy `.env.example` to `.env.local` and set the Supabase Project URL and public anon/publishable key.
+3. Create a new Supabase project and apply the migration described in [Supabase setup](./docs/supabase-setup.md).
+4. Add the first administrator through the Supabase Dashboard and allowlist that user's Auth UUID as documented in the setup guide.
+5. Run `npm install`, then `npm run dev`.
 
-## React Compiler
+Only public portfolio data is available to anonymous visitors. Content writes require a signed-in user whose UUID is in `public.admin_users`; the database enforces this with RLS. Never put a service-role key in a `VITE_*` variable.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+See [Supabase setup](./docs/supabase-setup.md) for the complete database, Auth, and troubleshooting instructions and [the migration plan](./docs/supabase-migration-plan.md) for the audit and implementation record.
 
-## Expanding the ESLint configuration
+## Scripts
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- `npm run dev` — start the Vite development server.
+- `npm run build` — create the production bundle in `dist/`.
+- `npm run preview` — preview the production bundle locally.
+- `npm run lint` — run ESLint.
 
-## Admin pengalaman
+There is no spreadsheet import. The new Supabase database starts empty; the existing built-in experience and achievement content remains as a fallback until updated or hidden through the admin panel.
 
-Panel `/admin` dapat menambah dan mengubah pengalaman, keterangan lengkap, kontribusi, serta subkegiatan. Setiap subkegiatan memiliki nama, keterangan, dan beberapa tautan dokumentasi. Halaman `/detail/:id` menampilkan dokumentasi dalam grid tiga kolom di layar lebar (menyesuaikan pada layar kecil), dengan preview gambar, video YouTube, serta embed tautan dokumen; tautan asli selalu tersedia jika layanan memblokir preview. Kolom `activityDocumentation` pada sheet `SubKegiatan` menyimpan daftar tautan sebagai JSON array; GAS tetap membaca nilai URL tunggal yang tersimpan sebelumnya.
+## Experience documentation
 
-Panel admin dapat menambah, mengedit, dan menghapus proyek. Pilih ikon pensil pada daftar proyek untuk memuat data ke formulir, ubah field yang diperlukan, lalu pilih **Simpan Perubahan**. Formulir proyek juga menerima URL thumbnail opsional. GAS menambahkan kolom `thumbnail` pada sheet `Projects` jika belum ada, dan kartu proyek menggunakan gambar tersebut dengan placeholder jika tautan kosong atau gagal dimuat.
-
-Panel admin juga dapat menambah, mengedit, dan menghapus pencapaian. Data disimpan di sheet `Achievement` dengan kolom `id`, `title`, `date`, dan `description`; GAS membuat sheet beserta header jika belum tersedia. Pencapaian bawaan tetap ditampilkan dan dapat diedit atau dihapus melalui admin.
-
-### Menyiapkan Google Apps Script
-
-1. Buka project Apps Script yang terhubung ke spreadsheet berisi sheet `Projects` dan `SubKegiatan`. Sheet `Achievement` akan dibuat otomatis saat endpoint pencapaian pertama kali dipanggil.
-2. Ganti isi script dengan kode di [`gas/Code.gs`](./gas/Code.gs). Sheet `SubKegiatan` yang masih kosong akan diberi header otomatis. Jika header telah dibuat, pastikan kolom-kolom berikut tersedia: `experienceId`, `organization`, `role`, `date`, `description`, `detail`, `contributions`, `activityId`, `activityTitle`, `activityDescription`, dan `activityDocumentation`.
-3. Deploy ulang sebagai Web App agar endpoint pencapaian dan aksi CRUD-nya aktif, jalankan sebagai akun pemilik spreadsheet, dan izinkan akses sesuai kebutuhan aplikasi.
-4. Pertahankan URL deployment yang dipakai di `src/data/projectsApi.js` atau perbarui `API_URL` jika URL Web App berubah.
-
-Permintaan tanpa parameter tetap mengembalikan data `Projects`; data pengalaman dibaca dari endpoint yang sama dengan parameter `?type=experiences`. Penyimpanan dan penghapusan pengalaman menggunakan aksi `saveExperience` dan `deleteExperience`. Data pengalaman yang dihapus dicatat di Script Properties agar pengalaman bawaan tidak muncul kembali.
-
-Data pengalaman yang sebelumnya hanya tersimpan di `localStorage` browser tidak otomatis dipindahkan ke spreadsheet. Simpan ulang data tersebut melalui panel admin setelah Apps Script diperbarui. Jika kolom dokumentasi sudah berisi teks seperti `[Ljava.lang.Object;@...`, tautan aslinya tidak dapat dipulihkan dari nilai tersebut; pasang GAS terbaru, buka pengalaman terkait di admin, masukkan ulang tautan dokumentasinya, lalu simpan.
+The `/detail/:id` route shows experience details, activities, and uploaded documentation images. The `/achievement/:id` route shows full achievement details, thumbnails, and documentation. Admin uploads accept JPG, PNG, WebP, and GIF up to 5 MB per image. Experience images are stored in the public `experience-documentation` bucket and achievement images in `achievement-documentation`; upload and delete access is restricted to allowlisted admins. Legacy experience documentation links continue to be displayed until removed from an activity.

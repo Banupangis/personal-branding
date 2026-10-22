@@ -1,60 +1,81 @@
 import { ACHIEVEMENTS } from './content';
-import { API_URL } from './projectsApi';
+import { getSupabaseClient } from '../lib/supabaseClient';
 
-function mergeAchievements(remoteData) {
-  if (remoteData && remoteData.status === 'error') {
-    throw new Error(remoteData.message || 'Google Sheets gagal mengambil data pencapaian.');
-  }
-  if (!remoteData || !Array.isArray(remoteData.achievements) || !Array.isArray(remoteData.deletedIds)) {
-    throw new Error('Format data pencapaian dari Google Sheets tidak valid.');
-  }
-
-  const remoteById = new Map(remoteData.achievements.map((achievement) => [String(achievement.id), achievement]));
-  const deletedIds = new Set(remoteData.deletedIds.map(String));
+function mergeAchievements(remoteAchievements, hiddenIds) {
+  const remoteById = new Map(remoteAchievements.map((achievement) => [String(achievement.id), achievement]));
   const defaultIds = new Set(ACHIEVEMENTS.map((achievement) => String(achievement.id)));
   const defaults = ACHIEVEMENTS
-    .filter((achievement) => !deletedIds.has(String(achievement.id)))
+    .filter((achievement) => !hiddenIds.has(String(achievement.id)))
     .map((achievement) => ({
       ...achievement,
       ...remoteById.get(String(achievement.id))
     }));
-  const additions = remoteData.achievements.filter((achievement) => !defaultIds.has(String(achievement.id)));
+  const additions = remoteAchievements.filter((achievement) => (
+    !defaultIds.has(String(achievement.id)) && !hiddenIds.has(String(achievement.id))
+  ));
 
-  return [...defaults, ...additions.filter((achievement) => !deletedIds.has(String(achievement.id)))];
-}
-
-async function postAchievement(payload) {
-  const response = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    redirect: 'follow',
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    throw new Error(`Gagal menyimpan pencapaian (HTTP ${response.status}).`);
-  }
-
-  const result = await response.json();
-  if (result.status !== 'success' && result.status !== 'deleted') {
-    throw new Error(result.message || 'Google Sheets gagal memproses pencapaian.');
-  }
-  return result;
+  return [...defaults, ...additions];
 }
 
 export async function fetchAchievements() {
-  const response = await fetch(`${API_URL}?type=achievements`);
-  if (!response.ok) {
-    throw new Error(`Gagal mengambil pencapaian (HTTP ${response.status}).`);
+  const client = getSupabaseClient();
+  const [achievementResult, hiddenResult] = await Promise.all([
+    client
+      .from('achievements')
+      .select('id, title, date, description, thumbnail, detail, documentation, created_at')
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true }),
+    client
+      .from('hidden_default_content')
+      .select('content_id')
+      .eq('entity_type', 'achievement')
+  ]);
+
+  if (achievementResult.error) {
+    throw new Error(`Gagal mengambil pencapaian dari Supabase: ${achievementResult.error.message}`);
+  }
+  if (hiddenResult.error) {
+    throw new Error(`Gagal mengambil status penghapusan pencapaian dari Supabase: ${hiddenResult.error.message}`);
   }
 
-  return mergeAchievements(await response.json());
+  const remoteAchievements = achievementResult.data.map((achievement) => ({
+    id: String(achievement.id),
+    title: achievement.title,
+    date: achievement.date,
+    description: achievement.description,
+    thumbnail: achievement.thumbnail || '',
+    detail: achievement.detail || achievement.description,
+    documentation: achievement.documentation || []
+  }));
+  const hiddenIds = new Set(hiddenResult.data.map((item) => String(item.content_id)));
+
+  return mergeAchievements(remoteAchievements, hiddenIds);
 }
 
-export function saveAchievement(achievement) {
-  return postAchievement({ action: 'saveAchievement', achievement });
+export async function saveAchievement(achievement) {
+  const { error } = await getSupabaseClient().rpc('save_achievement', {
+    p_id: String(achievement.id),
+    p_title: achievement.title.trim(),
+    p_date: achievement.date.trim(),
+    p_description: achievement.description.trim(),
+    p_thumbnail: achievement.thumbnail || '',
+    p_detail: achievement.detail || '',
+    p_documentation: achievement.documentation || []
+  });
+
+  if (error) {
+    throw new Error(`Gagal menyimpan pencapaian ke Supabase: ${error.message}`);
+  }
 }
 
-export function deleteAchievement(id) {
-  return postAchievement({ action: 'deleteAchievement', id: String(id) });
+export async function deleteAchievement(id) {
+  const defaultIds = new Set(ACHIEVEMENTS.map((achievement) => String(achievement.id)));
+  const { error } = await getSupabaseClient().rpc('delete_achievement', {
+    p_id: String(id),
+    p_hide_default: defaultIds.has(String(id))
+  });
+
+  if (error) {
+    throw new Error(`Gagal menghapus pencapaian dari Supabase: ${error.message}`);
+  }
 }

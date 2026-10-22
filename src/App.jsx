@@ -37,6 +37,7 @@ export default function App() {
         <Route path="/" element={<PublicPortfolio />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/detail/:id" element={<ExperienceDetail />} />
+        <Route path="/achievement/:id" element={<ExperienceDetail />} />
       </Routes>
     </BrowserRouter>
   );

@@ -1,7 +1,9 @@
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { fetchExperiences } from '../data/experienceApi';
+import { fetchAchievements } from '../data/achievementsApi';
+import { getDocumentationImageUrl } from '../data/documentationStorage';
 
 function getDocumentationPreview(url) {
   let parsedUrl;
@@ -100,7 +102,7 @@ function DocumentationPreview({ url, title }) {
 function DocumentationGallery({ documentation, title }) {
   const links = (Array.isArray(documentation) ? documentation : [documentation])
     .filter((url) => typeof url === 'string' && url.trim() && !/^\[Ljava\.lang\.Object;@[\da-f]+$/i.test(url.trim()))
-    .map((url) => url.trim());
+    .map((url) => getDocumentationImageUrl(url.trim()));
 
   if (!links.length) return null;
 
@@ -115,6 +117,8 @@ function DocumentationGallery({ documentation, title }) {
 
 export default function ExperienceDetail() {
   const { id } = useParams();
+  const { pathname } = useLocation();
+  const isAchievementRoute = pathname.startsWith('/achievement/');
   const [experience, setExperience] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -122,13 +126,13 @@ export default function ExperienceDetail() {
   useEffect(() => {
     let isMounted = true;
 
-    fetchExperiences()
-      .then((experiences) => {
-        if (isMounted) setExperience(experiences.find((item) => String(item.id) === id) || null);
+    (isAchievementRoute ? fetchAchievements() : fetchExperiences())
+      .then((items) => {
+        if (isMounted) setExperience(items.find((item) => String(item.id) === id) || null);
       })
       .catch((error) => {
-        console.error('Gagal mengambil data pengalaman:', error);
-        if (isMounted) setLoadError(error.message || 'Gagal mengambil data pengalaman.');
+        console.error('Gagal mengambil detail:', error);
+        if (isMounted) setLoadError(error.message || 'Gagal mengambil detail.');
       })
       .finally(() => {
         if (isMounted) setIsLoading(false);
@@ -137,14 +141,14 @@ export default function ExperienceDetail() {
     return () => {
       isMounted = false;
     };
-  }, [id]);
+  }, [id, isAchievementRoute]);
 
   return (
     <main className="experience-detail-page">
       <div className="container">
-        <Link to="/#experience" className="btn btn-outline">
+        <Link to={isAchievementRoute ? '/#achievements' : '/#experience'} className="btn btn-outline">
           <ArrowLeft size={18} />
-          Kembali ke pengalaman
+          {isAchievementRoute ? 'Kembali ke pencapaian' : 'Kembali ke pengalaman'}
         </Link>
 
         {isLoading ? (
@@ -153,17 +157,35 @@ export default function ExperienceDetail() {
           <p role="alert" style={{ marginTop: '32px', color: '#b91c1c' }}>{loadError}</p>
         ) : !experience ? (
           <div className="experience-detail-empty">
-            <h1>Pengalaman tidak ditemukan</h1>
-            <p>Data kegiatan ini mungkin sudah dihapus atau tautannya tidak valid.</p>
+            <h1>{isAchievementRoute ? 'Pencapaian tidak ditemukan' : 'Pengalaman tidak ditemukan'}</h1>
+            <p>Data ini mungkin sudah dihapus atau tautannya tidak valid.</p>
           </div>
         ) : (
           <article className="experience-detail-content">
-            <span className="tag">{experience.date}</span>
-            <h1>{experience.organization}</h1>
-            <h2>{experience.role}</h2>
-            <p className="experience-detail-intro">{experience.detail || experience.description}</p>
+            {isAchievementRoute ? (
+              <>
+                <span className="tag">{experience.date}</span>
+                <h1>{experience.title}</h1>
+                {experience.thumbnail && (
+                  <img
+                    className="achievement-detail-thumbnail"
+                    src={getDocumentationImageUrl(experience.thumbnail)}
+                    alt={`Thumbnail ${experience.title}`}
+                  />
+                )}
+                <p className="experience-detail-intro">{experience.detail || experience.description}</p>
+                <DocumentationGallery documentation={experience.documentation} title={experience.title} />
+              </>
+            ) : (
+              <>
+                <span className="tag">{experience.date}</span>
+                <h1>{experience.organization}</h1>
+                <h2>{experience.role}</h2>
+                <p className="experience-detail-intro">{experience.detail || experience.description}</p>
+              </>
+            )}
 
-            {experience.contributions?.length > 0 && (
+            {!isAchievementRoute && experience.contributions?.length > 0 && (
               <section className="experience-detail-section">
                 <h3>Peran dan kontribusi</h3>
                 <ul>
@@ -174,7 +196,7 @@ export default function ExperienceDetail() {
               </section>
             )}
 
-            {experience.activities?.length > 0 && (
+            {!isAchievementRoute && experience.activities?.length > 0 && (
               <section className="experience-detail-section">
                 <h3>Sub Kegiatan</h3>
                 <div className="experience-activity-list">

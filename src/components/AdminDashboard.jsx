@@ -1,8 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { Trash2, Plus, Loader2, Pencil, X } from 'lucide-react';
-import { API_URL, fetchProjects as getProjects } from '../data/projectsApi';
+import { deleteProject, fetchProjects, saveProject } from '../data/projectsApi';
 import { deleteExperience, fetchExperiences, saveExperience } from '../data/experienceApi';
 import { deleteAchievement, fetchAchievements, saveAchievement } from '../data/achievementsApi';
+import {
+  getDocumentationImageUrl,
+  isStoredDocumentationImage,
+  removeDocumentationImages,
+  uploadAchievementImage,
+  uploadDocumentationImage
+} from '../data/documentationStorage';
+import { getSupabaseClient } from '../lib/supabaseClient';
 
 const createEmptyActivity = () => ({
   id: `activity-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -34,10 +42,13 @@ const emptyProjectForm = {
 const emptyAchievementForm = {
   title: '',
   date: '',
-  description: ''
+  description: '',
+  thumbnail: '',
+  detail: '',
+  documentation: []
 };
 
-export default function AdminDashboard() {
+function AdminContent({ onSignOut, signOutError }) {
   const [projects, setProjects] = useState([]);
   const [experiences, setExperiences] = useState([]);
   const [achievements, setAchievements] = useState([]);
@@ -55,10 +66,25 @@ export default function AdminDashboard() {
   const [isSavingExperience, setIsSavingExperience] = useState(false);
   const [selectedExperienceId, setSelectedExperienceId] = useState('');
   const [experienceForm, setExperienceForm] = useState(emptyExperienceForm);
+  const [uploadedDocumentation, setUploadedDocumentation] = useState([]);
+  const [documentationImageSizes, setDocumentationImageSizes] = useState({});
+  const [isUploadingDocumentation, setIsUploadingDocumentation] = useState(false);
   const [achievementForm, setAchievementForm] = useState(emptyAchievementForm);
+  const [uploadedAchievementImages, setUploadedAchievementImages] = useState([]);
+  const [achievementImageSizes, setAchievementImageSizes] = useState({});
+  const [isUploadingAchievementImage, setIsUploadingAchievementImage] = useState(false);
 
   // Status formulir
   const [formData, setFormData] = useState(emptyProjectForm);
+
+  const clearImageSizes = (references, setSizes) => {
+    if (!references.length) return;
+    setSizes((current) => {
+      const next = { ...current };
+      references.forEach((reference) => delete next[reference]);
+      return next;
+    });
+  };
 
   const handleSelectProject = (project) => {
     setSelectedProjectId(String(project.id));
@@ -80,24 +106,10 @@ export default function AdminDashboard() {
     setProjectActionError('');
   };
 
-  // Ambil data
-  const loadProjects = useCallback(async () => {
-    try {
-      const data = await getProjects();
-      setProjects(data);
-      setLoadError('');
-    } catch (error) {
-      console.error("Gagal mengambil data:", error);
-      setLoadError(error.message || "Gagal mengambil data proyek.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     let isMounted = true;
 
-    getProjects()
+    fetchProjects()
       .then((data) => {
         if (isMounted) {
           setProjects(data);
@@ -158,16 +170,48 @@ export default function AdminDashboard() {
   }, []);
 
   const handleSelectAchievement = (achievement) => {
-    setSelectedAchievementId(String(achievement.id));
-    setAchievementForm({
-      title: achievement.title || '',
-      date: achievement.date || '',
-      description: achievement.description || ''
-    });
-    setAchievementError('');
+    if (isUploadingAchievementImage) return;
+    void (async () => {
+      if (!await discardUnsavedAchievementImages()) return;
+      setSelectedAchievementId(String(achievement.id));
+      setAchievementForm({
+        title: achievement.title || '',
+        date: achievement.date || '',
+        description: achievement.description || '',
+        thumbnail: achievement.thumbnail || '',
+        detail: achievement.detail || achievement.description || '',
+        documentation: Array.isArray(achievement.documentation) ? achievement.documentation : []
+      });
+      setAchievementError('');
+    })();
   };
 
-  const handleNewAchievement = () => {
+  const discardUnsavedAchievementImages = async () => {
+    if (!uploadedAchievementImages.length) return true;
+    try {
+      await removeDocumentationImages(uploadedAchievementImages);
+      setUploadedAchievementImages([]);
+      clearImageSizes(uploadedAchievementImages, setAchievementImageSizes);
+      return true;
+    } catch (error) {
+      setAchievementError(error.message || 'Gagal membersihkan gambar yang belum disimpan.');
+      return false;
+    }
+  };
+
+  const removeUnsavedAchievementImage = async (reference) => {
+    if (!uploadedAchievementImages.includes(reference)) return;
+    try {
+      await removeDocumentationImages([reference]);
+      setUploadedAchievementImages((current) => current.filter((item) => item !== reference));
+      clearImageSizes([reference], setAchievementImageSizes);
+    } catch (error) {
+      setAchievementError(error.message || 'Gagal menghapus gambar yang belum disimpan.');
+    }
+  };
+
+  const handleNewAchievement = async () => {
+    if (isUploadingAchievementImage || !await discardUnsavedAchievementImages()) return;
     setSelectedAchievementId('');
     setAchievementForm({ ...emptyAchievementForm });
     setAchievementError('');
@@ -178,20 +222,56 @@ export default function AdminDashboard() {
     setIsSavingAchievement(true);
     setAchievementError('');
 
+    let achievementWasSaved = false;
     try {
+      const existingAchievement = achievements.find((item) => String(item.id) === selectedAchievementId);
+      const thumbnail = achievementForm.thumbnail.trim();
+      if (thumbnail && !isStoredDocumentationImage(thumbnail)) {
+        let thumbnailUrl;
+        try { thumbnailUrl = new URL(thumbnail); } catch { throw new Error('Tautan thumbnail tidak valid.'); }
+        if (!['http:', 'https:'].includes(thumbnailUrl.protocol)) throw new Error('Tautan thumbnail harus menggunakan http atau https.');
+      }
+      const documentation = achievementForm.documentation.filter(Boolean);
+      const retainedImages = new Set([thumbnail, ...documentation]);
+      const removedImages = [existingAchievement?.thumbnail, ...(existingAchievement?.documentation || [])]
+        .filter((reference) => reference && !retainedImages.has(reference));
       const achievement = {
         id: selectedAchievementId || `achievement-${Date.now()}`,
         title: achievementForm.title.trim(),
         date: achievementForm.date.trim(),
-        description: achievementForm.description.trim()
+        description: achievementForm.description.trim(),
+        thumbnail,
+        detail: achievementForm.detail.trim(),
+        documentation
       };
       await saveAchievement(achievement);
+      achievementWasSaved = true;
       setAchievements(await fetchAchievements());
       setSelectedAchievementId(String(achievement.id));
+      setUploadedAchievementImages([]);
+      if (removedImages.length) await removeDocumentationImages(removedImages);
       setAchievementError('Pencapaian berhasil disimpan.');
     } catch (error) {
       console.error('Gagal menyimpan pencapaian:', error);
-      setAchievementError(error.message || 'Gagal menyimpan pencapaian.');
+      setAchievementError(achievementWasSaved
+        ? `Pencapaian tersimpan, tetapi operasi lanjutan gagal: ${error.message}`
+        : error.message || 'Gagal menyimpan pencapaian.');
+      if (!achievementWasSaved && uploadedAchievementImages.length) {
+        try {
+          await removeDocumentationImages(uploadedAchievementImages);
+          clearImageSizes(uploadedAchievementImages, setAchievementImageSizes);
+          const removedUploads = new Set(uploadedAchievementImages);
+          setAchievementForm((current) => ({
+            ...current,
+            thumbnail: removedUploads.has(current.thumbnail) ? '' : current.thumbnail,
+            documentation: current.documentation.filter((reference) => !removedUploads.has(reference))
+          }));
+          setUploadedAchievementImages([]);
+      clearImageSizes(uploadedAchievementImages, setAchievementImageSizes);
+        } catch (cleanupError) {
+          setAchievementError(`${error.message || 'Gagal menyimpan pencapaian.'} ${cleanupError.message}`);
+        }
+      }
     } finally {
       setIsSavingAchievement(false);
     }
@@ -199,11 +279,18 @@ export default function AdminDashboard() {
 
   const handleDeleteAchievement = async (achievement) => {
     if (!window.confirm(`Hapus pencapaian "${achievement.title}"?`)) return;
+    if (isUploadingAchievementImage || !await discardUnsavedAchievementImages()) return;
 
     try {
       await deleteAchievement(achievement.id);
       setAchievements(await fetchAchievements());
       if (String(achievement.id) === selectedAchievementId) handleNewAchievement();
+      try {
+        await removeDocumentationImages([achievement.thumbnail, ...(achievement.documentation || [])].filter(isStoredDocumentationImage));
+      } catch (error) {
+        setAchievementError(`Pencapaian terhapus, tetapi gambar gagal dihapus: ${error.message}`);
+        return;
+      }
       setAchievementError('Pencapaian berhasil dihapus.');
     } catch (error) {
       console.error('Gagal menghapus pencapaian:', error);
@@ -211,7 +298,45 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleSelectExperience = (experience) => {
+  const handleUploadAchievementImage = async (file, destination) => {
+    if (!file) return;
+    setIsUploadingAchievementImage(true);
+    setAchievementError('');
+    try {
+      const upload = await uploadAchievementImage(file);
+      const { reference } = upload;
+      setAchievementForm((current) => ({
+        ...current,
+        ...(destination === 'thumbnail'
+          ? { thumbnail: reference }
+          : { documentation: [...current.documentation, reference] })
+      }));
+      setUploadedAchievementImages((current) => [...current, reference]);
+      setAchievementImageSizes((current) => ({ ...current, [reference]: upload }));
+    } catch (error) {
+      setAchievementError(error.message || 'Gagal mengunggah gambar pencapaian.');
+    } finally {
+      setIsUploadingAchievementImage(false);
+    }
+  };
+
+  const discardUnsavedDocumentation = async () => {
+    if (!uploadedDocumentation.length) return true;
+    try {
+      await removeDocumentationImages(uploadedDocumentation);
+      setUploadedDocumentation([]);
+      clearImageSizes(uploadedDocumentation, setDocumentationImageSizes);
+      return true;
+    } catch (error) {
+      console.error('Gagal membersihkan gambar yang belum disimpan:', error);
+      setExperienceError(error.message || 'Gagal membersihkan gambar yang belum disimpan.');
+      return false;
+    }
+  };
+
+  const handleSelectExperience = async (experience) => {
+    if (isUploadingDocumentation) return;
+    if (!await discardUnsavedDocumentation()) return;
     setSelectedExperienceId(String(experience.id));
     setExperienceForm({
       organization: experience.organization || '',
@@ -235,16 +360,45 @@ export default function AdminDashboard() {
     setExperienceError('');
   };
 
-  const handleNewExperience = () => {
+  const handleNewExperience = async () => {
+    if (isUploadingDocumentation) return;
+    if (!await discardUnsavedDocumentation()) return;
     setSelectedExperienceId('');
     setExperienceForm(emptyExperienceForm);
     setExperienceError('');
+  };
+
+  const handleUploadDocumentation = async (activityId, file) => {
+    if (!file) return;
+
+    setIsUploadingDocumentation(true);
+    setExperienceError('');
+    try {
+      const upload = await uploadDocumentationImage(file);
+      const { reference } = upload;
+      setExperienceForm((current) => ({
+        ...current,
+        activities: current.activities.map((activity) => (
+          activity.id === activityId
+            ? { ...activity, documentation: [...activity.documentation, reference] }
+            : activity
+        ))
+      }));
+      setUploadedDocumentation((current) => [...current, reference]);
+      setDocumentationImageSizes((current) => ({ ...current, [reference]: upload }));
+    } catch (error) {
+      console.error('Gagal mengunggah gambar dokumentasi:', error);
+      setExperienceError(error.message || 'Gagal mengunggah gambar dokumentasi.');
+    } finally {
+      setIsUploadingDocumentation(false);
+    }
   };
 
   const handleSaveExperience = async (event) => {
     event.preventDefault();
     setIsSavingExperience(true);
     setExperienceError('');
+    let experienceWasSaved = false;
 
     try {
       const activities = experienceForm.activities
@@ -252,7 +406,7 @@ export default function AdminDashboard() {
           ...activity,
           title: activity.title.trim(),
           description: activity.description.trim(),
-          documentation: activity.documentation.map((url) => url.trim()).filter(Boolean)
+          documentation: activity.documentation.filter(Boolean)
         }))
         .filter((activity) => activity.title || activity.description || activity.documentation.length)
         .map((activity) => {
@@ -260,22 +414,23 @@ export default function AdminDashboard() {
             throw new Error('Nama setiap subkegiatan yang diisi harus dilengkapi.');
           }
 
-          const documentation = activity.documentation.map((link) => {
-            let url;
-            try {
-              url = new URL(link);
-            } catch {
-              throw new Error(`Tautan dokumentasi subkegiatan "${activity.title}" tidak valid.`);
-            }
-            if (!['http:', 'https:'].includes(url.protocol)) {
-              throw new Error(`Tautan dokumentasi subkegiatan "${activity.title}" harus menggunakan http atau https.`);
-            }
-            return url.href;
-          });
-          return { ...activity, documentation };
+          return activity;
         });
+      const existingExperience = experiences.find(
+        (item) => String(item.id) === selectedExperienceId
+      );
+      const retainedDocumentation = new Set(
+        activities.flatMap((activity) => activity.documentation)
+      );
+      const removedDocumentation = (existingExperience?.activities || [])
+        .flatMap((activity) => activity.documentation || [])
+        .filter((reference) => !retainedDocumentation.has(reference));
+      const unretainedUploads = uploadedDocumentation.filter(
+        (reference) => !retainedDocumentation.has(reference)
+      );
       const experience = {
         id: selectedExperienceId || `custom-${Date.now()}`,
+        link: existingExperience?.link || '',
         organization: experienceForm.organization.trim(),
         role: experienceForm.role.trim(),
         date: experienceForm.date.trim(),
@@ -285,12 +440,47 @@ export default function AdminDashboard() {
         activities
       };
       await saveExperience(experience);
+      experienceWasSaved = true;
       setExperiences(await fetchExperiences());
       setSelectedExperienceId(String(experience.id));
+      setUploadedDocumentation([]);
+      clearImageSizes(uploadedDocumentation, setDocumentationImageSizes);
+      try {
+        await removeDocumentationImages([...removedDocumentation, ...unretainedUploads]);
+      } catch (error) {
+        console.error('Data tersimpan, tetapi gambar lama gagal dihapus:', error);
+        setExperienceError(`Perubahan tersimpan, tetapi gambar lama gagal dihapus: ${error.message}`);
+        return;
+      }
       setExperienceError('Perubahan pengalaman berhasil disimpan.');
     } catch (error) {
       console.error('Gagal menyimpan data pengalaman:', error);
-      setExperienceError(error.message || 'Gagal menyimpan data pengalaman.');
+      setExperienceError(experienceWasSaved
+        ? `Perubahan tersimpan, tetapi gagal memuat ulang data: ${error.message}`
+        : error.message || 'Gagal menyimpan data pengalaman.');
+      if (experienceWasSaved) {
+        setUploadedDocumentation([]);
+      } else if (uploadedDocumentation.length) {
+        try {
+          await removeDocumentationImages(uploadedDocumentation);
+          clearImageSizes(uploadedDocumentation, setDocumentationImageSizes);
+          setExperienceForm((current) => ({
+            ...current,
+            activities: current.activities.map((activity) => ({
+              ...activity,
+              documentation: activity.documentation.filter(
+                (reference) => !uploadedDocumentation.includes(reference)
+              )
+            }))
+          }));
+          setUploadedDocumentation([]);
+        } catch (cleanupError) {
+          console.error('Gagal membersihkan gambar yang belum tersimpan:', cleanupError);
+          setExperienceError(
+            `${error.message || 'Gagal menyimpan data pengalaman.'} ${cleanupError.message}`
+          );
+        }
+      }
     } finally {
       setIsSavingExperience(false);
     }
@@ -298,11 +488,21 @@ export default function AdminDashboard() {
 
   const handleDeleteExperience = async (experience) => {
     if (!window.confirm(`Hapus pengalaman "${experience.organization}"?`)) return;
+    if (!await discardUnsavedDocumentation()) return;
 
     try {
       await deleteExperience(experience.id);
-      setExperiences(await fetchExperiences());
-      if (String(experience.id) === selectedExperienceId) handleNewExperience();
+      setExperiences((current) => current.filter((item) => String(item.id) !== String(experience.id)));
+      if (String(experience.id) === selectedExperienceId) await handleNewExperience();
+      const documentation = (experience.activities || [])
+        .flatMap((activity) => activity.documentation || [])
+        .filter(isStoredDocumentationImage);
+      try {
+        await removeDocumentationImages(documentation);
+      } catch (error) {
+        console.error('Pengalaman terhapus, tetapi gambar dokumentasi gagal dihapus:', error);
+        setExperienceError(`Pengalaman terhapus, tetapi gambar gagal dihapus: ${error.message}`);
+      }
       setExperienceError('Pengalaman berhasil dihapus.');
     } catch (error) {
       console.error('Gagal menghapus data pengalaman:', error);
@@ -330,35 +530,21 @@ export default function AdminDashboard() {
         projectPayload.thumbnail = thumbnailUrl.href;
       }
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/plain;charset=utf-8", // WAJIB ADA AGAR TIDAK KENA CORS
-        },
-        redirect: "follow", // WAJIB ADA karena Apps Script melakukan redirect
-        body: JSON.stringify({
-          action: selectedProjectId ? 'update' : 'create',
-          ...(selectedProjectId ? { id: selectedProjectId } : {}),
-          ...projectPayload
-        })
+      const savedProject = await saveProject({
+        ...projectPayload,
+        ...(selectedProjectId ? { id: selectedProjectId } : {})
       });
-      if (!response.ok) throw new Error(`Gagal menambahkan proyek (HTTP ${response.status}).`);
-      const result = await response.json();
-      if (result.status !== 'success') {
-        throw new Error(result.message || 'Google Sheets gagal menambahkan proyek.');
-      }
       if (selectedProjectId) {
         setProjects((currentProjects) => currentProjects.map((project) => (
           String(project.id) === selectedProjectId
-            ? { ...project, ...projectPayload, id: selectedProjectId }
+            ? savedProject
             : project
         )));
         handleNewProject();
         setProjectActionError('Perubahan proyek berhasil disimpan.');
       } else {
+        setProjects((currentProjects) => [...currentProjects, savedProject]);
         handleNewProject();
-        setIsLoading(true);
-        await loadProjects();
       }
     } catch (error) {
       console.error("Gagal menambahkan data:", error);
@@ -374,35 +560,37 @@ export default function AdminDashboard() {
     setProjectActionError('');
 
     try {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        redirect: "follow",
-        body: JSON.stringify({ action: "delete", id })
-      });
-      if (!response.ok) throw new Error(`Gagal menghapus proyek (HTTP ${response.status}).`);
-      const result = await response.json();
-      if (result.status !== 'deleted') {
-        throw new Error(result.message || 'Google Sheets gagal menghapus proyek.');
-      }
+      await deleteProject(id);
       setProjects((currentProjects) => currentProjects.filter((project) => String(project.id) !== String(id)));
       if (String(id) === selectedProjectId) handleNewProject();
     } catch (error) {
       console.error("Gagal menghapus data:", error);
       setProjectActionError(error.message || "Gagal menghapus proyek.");
-      setIsLoading(true);
-      loadProjects();
     }
   };
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#FAFAFA', fontFamily: 'var(--font-body)' }}>
       {/* Judul admin */}
-      <header className="admin-header" style={{ backgroundColor: 'var(--color-dark-blue)', color: 'white' }}>
+      <header
+        className="admin-header"
+        style={{
+          backgroundColor: 'var(--color-dark-blue)',
+          color: 'white',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '16px'
+        }}
+      >
         <h1 style={{ margin: 0, fontSize: '1.5rem', fontFamily: 'var(--font-heading)', color: 'white' }}>
           Panel Admin Dhanu
         </h1>
+        <button type="button" className="btn btn-outline" onClick={onSignOut}>
+          Keluar
+        </button>
       </header>
+      {signOutError && <p role="alert" className="admin-error">{signOutError}</p>}
 
       <div className="admin-layout">
         
@@ -442,7 +630,7 @@ export default function AdminDashboard() {
           <h2 style={{ fontSize: '1.2rem', marginBottom: '24px', color: 'var(--color-dark-blue)' }}>Kelola Proyek</h2>
           
           {isLoading ? (
-            <p>Memuat data dari Google Sheets...</p>
+            <p>Memuat data proyek...</p>
           ) : loadError ? (
             <p role="alert" style={{ color: '#b91c1c' }}>{loadError}</p>
           ) : (
@@ -509,7 +697,7 @@ export default function AdminDashboard() {
             <div>
               <h3 className="admin-subheading">Daftar pengalaman</h3>
               {isLoadingExperiences ? (
-                <p>Memuat pengalaman dari Google Sheets...</p>
+                <p>Memuat pengalaman...</p>
               ) : experienceError && experiences.length === 0 ? (
                 <p role="alert" className="admin-error">{experienceError}</p>
               ) : experiences.length === 0 ? (
@@ -608,30 +796,28 @@ export default function AdminDashboard() {
                     />
                     <div className="admin-activity-documentation">
                       <strong>Dokumentasi kegiatan</strong>
-                      {activity.documentation.map((url, linkIndex) => (
-                        <div className="admin-documentation-link-row" key={`${activity.id}-documentation-${linkIndex}`}>
-                          <input
-                            aria-label={`Tautan dokumentasi ${linkIndex + 1} subkegiatan ${index + 1}`}
-                            type="url"
-                            placeholder="Tautan dokumentasi (https://...)"
-                            value={url}
-                            onChange={(event) => setExperienceForm({
-                              ...experienceForm,
-                              activities: experienceForm.activities.map((item) => item.id === activity.id
-                                ? {
-                                    ...item,
-                                    documentation: item.documentation.map((link, itemIndex) => itemIndex === linkIndex
-                                      ? event.target.value
-                                      : link)
-                                  }
-                                : item)
-                            })}
-                            style={inputStyle}
-                          />
+                      {activity.documentation.map((reference, linkIndex) => (
+                        <div className="admin-documentation-image-row" key={`${activity.id}-documentation-${linkIndex}`}>
+                          {isStoredDocumentationImage(reference) ? (
+                            <img
+                              src={getDocumentationImageUrl(reference)}
+                              alt={`Dokumentasi ${linkIndex + 1} subkegiatan ${index + 1}`}
+                            />
+                          ) : (
+                            <a href={reference} target="_blank" rel="noreferrer">
+                              Dokumentasi lama (tautan)
+                            </a>
+                          )}
+                          {documentationImageSizes[reference] && (
+                            <small className="admin-image-size">
+                              {formatFileSize(documentationImageSizes[reference].originalSize)} → {formatFileSize(documentationImageSizes[reference].uploadedSize)}
+                              {documentationImageSizes[reference].wasCompressed ? ' (dikompres)' : ' (ukuran tetap)'}
+                            </small>
+                          )}
                           <button
                             type="button"
                             className="admin-icon-button"
-                            aria-label={`Hapus tautan dokumentasi ${linkIndex + 1} subkegiatan ${index + 1}`}
+                            aria-label={`Hapus gambar dokumentasi ${linkIndex + 1} subkegiatan ${index + 1}`}
                             onClick={() => setExperienceForm({
                               ...experienceForm,
                               activities: experienceForm.activities.map((item) => item.id === activity.id
@@ -643,26 +829,29 @@ export default function AdminDashboard() {
                           </button>
                         </div>
                       ))}
-                      <button
-                        type="button"
-                        className="btn btn-outline admin-add-documentation"
-                        onClick={() => setExperienceForm({
-                          ...experienceForm,
-                          activities: experienceForm.activities.map((item) => item.id === activity.id
-                            ? { ...item, documentation: [...item.documentation, ''] }
-                            : item)
-                        })}
-                      >
-                        <Plus size={16} /> Tambah tautan dokumentasi
-                      </button>
+                      <label className="btn btn-outline admin-add-documentation">
+                        <Plus size={16} /> Tambah gambar
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          aria-label={`Unggah gambar dokumentasi subkegiatan ${index + 1}`}
+                          disabled={isUploadingDocumentation || isSavingExperience}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            void handleUploadDocumentation(activity.id, file);
+                            event.target.value = '';
+                          }}
+                        />
+                      </label>
+                      <small>JPG, PNG, WebP, atau GIF; maksimal 5 MB per gambar.</small>
                     </div>
                   </fieldset>
                 ))}
               </div>
 
-              <button type="submit" disabled={isSavingExperience} className="btn btn-primary">
-                {isSavingExperience ? <Loader2 className="spin" size={18} /> : <Plus size={18} />}
-                {isSavingExperience ? 'Menyimpan...' : 'Simpan Pengalaman'}
+              <button type="submit" disabled={isSavingExperience || isUploadingDocumentation} className="btn btn-primary">
+                {isSavingExperience || isUploadingDocumentation ? <Loader2 className="spin" size={18} /> : <Plus size={18} />}
+                {isUploadingDocumentation ? 'Mengunggah gambar...' : isSavingExperience ? 'Menyimpan...' : 'Simpan Pengalaman'}
               </button>
               {selectedExperienceId && (
                 <button type="button" className="btn btn-outline" onClick={handleNewExperience}>
@@ -683,7 +872,7 @@ export default function AdminDashboard() {
                 Tambahkan, edit, atau hapus pencapaian yang ditampilkan di halaman utama.
               </p>
             </div>
-            <button type="button" className="btn btn-outline" onClick={handleNewAchievement}>
+          <button type="button" className="btn btn-outline" onClick={handleNewAchievement} disabled={isUploadingAchievementImage || isSavingAchievement}>
               <Plus size={18} /> Pencapaian Baru
             </button>
           </div>
@@ -698,7 +887,7 @@ export default function AdminDashboard() {
             <div>
               <h3 className="admin-subheading">Daftar pencapaian</h3>
               {isLoadingAchievements ? (
-                <p>Memuat pencapaian dari Google Sheets...</p>
+                <p>Memuat pencapaian...</p>
               ) : achievementError && achievements.length === 0 ? (
                 <p role="alert" className="admin-error">{achievementError}</p>
               ) : achievements.length === 0 ? (
@@ -753,13 +942,114 @@ export default function AdminDashboard() {
                   onChange={(event) => setAchievementForm({ ...achievementForm, description: event.target.value })}
                   style={inputStyle}
                 />
+                <textarea
+                  rows="6"
+                  placeholder="Cerita lengkap pencapaian: proses, peran, dan hasil"
+                  value={achievementForm.detail}
+                  onChange={(event) => setAchievementForm({ ...achievementForm, detail: event.target.value })}
+                  style={inputStyle}
+                />
               </div>
-              <button type="submit" disabled={isSavingAchievement} className="btn btn-primary">
-                {isSavingAchievement ? <Loader2 className="spin" size={18} /> : selectedAchievementId ? <Pencil size={18} /> : <Plus size={18} />}
-                {isSavingAchievement ? 'Menyimpan...' : selectedAchievementId ? 'Simpan Perubahan' : 'Simpan Pencapaian'}
+              <div className="admin-activity-documentation">
+                <strong>Thumbnail pencapaian</strong>
+                {achievementForm.thumbnail && (
+                  <div className="admin-documentation-image-row">
+                    <img
+                      src={getDocumentationImageUrl(achievementForm.thumbnail)}
+                      alt="Thumbnail pencapaian"
+                    />
+                    {achievementImageSizes[achievementForm.thumbnail] && (
+                      <small className="admin-image-size">
+                        {formatFileSize(achievementImageSizes[achievementForm.thumbnail].originalSize)} → {formatFileSize(achievementImageSizes[achievementForm.thumbnail].uploadedSize)}
+                        {achievementImageSizes[achievementForm.thumbnail].wasCompressed ? ' (dikompres)' : ' (ukuran tetap)'}
+                      </small>
+                    )}
+                    <button
+                      type="button"
+                      className="admin-icon-button"
+                      aria-label="Hapus thumbnail pencapaian"
+                      onClick={() => {
+                        const reference = achievementForm.thumbnail;
+                        setAchievementForm({ ...achievementForm, thumbnail: '' });
+                        void removeUnsavedAchievementImage(reference);
+                      }}
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                )}
+                <label className="btn btn-outline admin-add-documentation">
+                  <Plus size={16} /> Unggah thumbnail
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    aria-label="Unggah thumbnail pencapaian"
+                    disabled={isUploadingAchievementImage || isSavingAchievement}
+                    onChange={(event) => {
+                      void handleUploadAchievementImage(event.target.files?.[0], 'thumbnail');
+                      event.target.value = '';
+                    }}
+                  />
+                </label>
+                <input
+                  type="url"
+                  placeholder="Atau tautan thumbnail (https://...)"
+                  value={isStoredDocumentationImage(achievementForm.thumbnail) ? '' : achievementForm.thumbnail}
+                  onChange={(event) => setAchievementForm({ ...achievementForm, thumbnail: event.target.value })}
+                  style={inputStyle}
+                />
+                <small>JPG, PNG, WebP, atau GIF; maksimal 5 MB per gambar.</small>
+              </div>
+              <div className="admin-activity-documentation">
+                <strong>Dokumentasi pencapaian</strong>
+                {achievementForm.documentation.map((reference, index) => (
+                  <div className="admin-documentation-image-row" key={`achievement-documentation-${index}`}>
+                    {isStoredDocumentationImage(reference) ? (
+                      <img src={getDocumentationImageUrl(reference)} alt={`Dokumentasi pencapaian ${index + 1}`} />
+                    ) : (
+                      <a href={reference} target="_blank" rel="noreferrer">Dokumentasi lama (tautan)</a>
+                    )}
+                    {achievementImageSizes[reference] && (
+                      <small className="admin-image-size">
+                        {formatFileSize(achievementImageSizes[reference].originalSize)} → {formatFileSize(achievementImageSizes[reference].uploadedSize)}
+                        {achievementImageSizes[reference].wasCompressed ? ' (dikompres)' : ' (ukuran tetap)'}
+                      </small>
+                    )}
+                    <button
+                      type="button"
+                      className="admin-icon-button"
+                      aria-label={`Hapus dokumentasi pencapaian ${index + 1}`}
+                      onClick={() => {
+                        setAchievementForm({
+                          ...achievementForm,
+                          documentation: achievementForm.documentation.filter((_, itemIndex) => itemIndex !== index)
+                        });
+                        void removeUnsavedAchievementImage(reference);
+                      }}
+                    ><X size={18} /></button>
+                  </div>
+                ))}
+                <label className="btn btn-outline admin-add-documentation">
+                  <Plus size={16} /> Tambah gambar
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    aria-label="Unggah dokumentasi pencapaian"
+                    disabled={isUploadingAchievementImage || isSavingAchievement}
+                    onChange={(event) => {
+                      void handleUploadAchievementImage(event.target.files?.[0], 'documentation');
+                      event.target.value = '';
+                    }}
+                  />
+                </label>
+                <small>JPG, PNG, WebP, atau GIF; maksimal 5 MB per gambar.</small>
+              </div>
+              <button type="submit" disabled={isSavingAchievement || isUploadingAchievementImage} className="btn btn-primary">
+                {isSavingAchievement || isUploadingAchievementImage ? <Loader2 className="spin" size={18} /> : selectedAchievementId ? <Pencil size={18} /> : <Plus size={18} />}
+                {isUploadingAchievementImage ? 'Mengunggah gambar...' : isSavingAchievement ? 'Menyimpan...' : selectedAchievementId ? 'Simpan Perubahan' : 'Simpan Pencapaian'}
               </button>
               {selectedAchievementId && (
-                <button type="button" className="btn btn-outline" onClick={handleNewAchievement}>
+                <button type="button" className="btn btn-outline" onClick={handleNewAchievement} disabled={isUploadingAchievementImage || isSavingAchievement}>
                   <X size={18} /> Batal mengedit
                 </button>
               )}
@@ -782,3 +1072,180 @@ const inputStyle = {
   boxSizing: 'border-box',
   outline: 'none'
 };
+
+function formatFileSize(size) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+export default function AdminDashboard() {
+  const [session, setSession] = useState(null);
+  const [clientError] = useState(() => {
+    try {
+      getSupabaseClient();
+      return '';
+    } catch (error) {
+      return error.message || 'Konfigurasi Supabase belum tersedia.';
+    }
+  });
+  const [isCheckingSession, setIsCheckingSession] = useState(!clientError);
+  const [adminCheck, setAdminCheck] = useState({ accessToken: '', isAdmin: false, error: '' });
+  const [authError, setAuthError] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSigningIn, setIsSigningIn] = useState(false);
+
+  useEffect(() => {
+    if (clientError) return undefined;
+
+    let isMounted = true;
+    const client = getSupabaseClient();
+
+    const { data: { subscription } } = client.auth.onAuthStateChange((_event, nextSession) => {
+      if (isMounted) {
+        setSession(nextSession);
+        setAuthError('');
+      }
+    });
+
+    client.auth.getSession()
+      .then(({ data, error }) => {
+        if (error) throw error;
+        if (isMounted) setSession(data.session);
+      })
+      .catch((error) => {
+        if (isMounted) setAuthError(`Gagal memeriksa sesi: ${error.message}`);
+      })
+      .finally(() => {
+        if (isMounted) setIsCheckingSession(false);
+      });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [clientError]);
+
+  useEffect(() => {
+    if (!session || clientError) return undefined;
+
+    let isMounted = true;
+    const accessToken = session.access_token;
+
+    getSupabaseClient().rpc('is_admin')
+      .then(({ data, error }) => {
+        if (error) throw error;
+        if (isMounted) setAdminCheck({ accessToken, isAdmin: data === true, error: '' });
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setAdminCheck({
+            accessToken,
+            isAdmin: false,
+            error: `Gagal memverifikasi hak admin: ${error.message}`
+          });
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [session, clientError]);
+
+  const handleSignIn = async (event) => {
+    event.preventDefault();
+    setIsSigningIn(true);
+    setAuthError('');
+
+    try {
+      const { error } = await getSupabaseClient().auth.signInWithPassword({
+        email: email.trim(),
+        password
+      });
+      if (error) throw error;
+      setPassword('');
+    } catch (error) {
+      setAuthError(`Gagal masuk: ${error.message}`);
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setAuthError('');
+    try {
+      const { error } = await getSupabaseClient().auth.signOut();
+      if (error) throw error;
+    } catch (error) {
+      setAuthError(`Gagal keluar: ${error.message}`);
+    }
+  };
+
+  const hasAdminCheck = session && adminCheck.accessToken === session.access_token;
+
+  if (!clientError && (isCheckingSession || (session && !hasAdminCheck))) {
+    return <main className="container" style={{ padding: '64px 24px' }}>Memeriksa sesi admin...</main>;
+  }
+
+  if (!session) {
+    return (
+      <main className="container" style={{ maxWidth: '440px', padding: '64px 24px' }}>
+        <section className="admin-panel">
+          <h1 style={{ marginTop: 0, color: 'var(--color-dark-blue)' }}>Masuk ke panel admin</h1>
+          <p>Gunakan akun yang telah diizinkan sebagai administrator.</p>
+          {(clientError || authError) && <p role="alert" className="admin-error">{clientError || authError}</p>}
+          <form onSubmit={handleSignIn} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <label>
+              Email
+              <input
+                required
+                type="email"
+                autoComplete="username"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                style={inputStyle}
+              />
+            </label>
+            <label>
+              Kata sandi
+              <input
+                required
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                style={inputStyle}
+              />
+            </label>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={isSigningIn || Boolean(clientError)}
+            >
+              {isSigningIn ? <Loader2 className="spin" size={18} /> : null}
+              {isSigningIn ? 'Memeriksa...' : 'Masuk'}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  if (!adminCheck.isAdmin) {
+    return (
+      <main className="container" style={{ maxWidth: '560px', padding: '64px 24px' }}>
+        <section className="admin-panel">
+          <h1 style={{ marginTop: 0, color: 'var(--color-dark-blue)' }}>Akses admin tidak tersedia</h1>
+          <p>Akun ini belum tercantum dalam allowlist administrator Supabase.</p>
+          {(adminCheck.error || authError) && (
+            <p role="alert" className="admin-error">{adminCheck.error || authError}</p>
+          )}
+          <button type="button" className="btn btn-outline" onClick={handleSignOut}>Keluar</button>
+        </section>
+      </main>
+    );
+  }
+
+  return <AdminContent onSignOut={handleSignOut} signOutError={authError} />;
+}
