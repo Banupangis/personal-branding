@@ -9,7 +9,7 @@ export function getSupabaseClient() {
   const publicKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
 
   if (!url || !publicKey) {
-    throw new Error('Konfigurasi Supabase belum tersedia. Isi VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY di file .env lokal.');
+    throw new Error('database belum connect');
   }
 
   supabaseClient = createClient(url, publicKey);
