@@ -1,5 +1,5 @@
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { ArrowLeft, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ExternalLink, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { fetchExperiences } from '../data/experienceApi';
 import { fetchAchievements } from '../data/achievementsApi';
@@ -58,7 +58,7 @@ function getDocumentationPreview(url) {
   return { type: 'embed', url: parsedUrl.href };
 }
 
-function DocumentationPreview({ url, title }) {
+function DocumentationPreview({ url, title, onImageClick }) {
   const [imageSourceIndex, setImageSourceIndex] = useState(0);
   const preview = getDocumentationPreview(url);
   const imageSources = preview.type === 'image' ? (preview.urls || [preview.url]) : [];
@@ -67,12 +67,19 @@ function DocumentationPreview({ url, title }) {
   return (
     <article className={`experience-documentation-item${preview.type === 'image' ? ' is-image' : ''}`}>
       {preview.type === 'image' && !hasImageError ? (
-        <img
-          src={imageSources[imageSourceIndex]}
-          alt={`Dokumentasi ${title}`}
-          loading="lazy"
-          onError={() => setImageSourceIndex((index) => index + 1)}
-        />
+        <button
+          type="button"
+          className="experience-documentation-image-button"
+          onClick={() => onImageClick(imageSources[imageSourceIndex], `Dokumentasi ${title}`)}
+          aria-label={`Perbesar dokumentasi ${title}`}
+        >
+          <img
+            src={imageSources[imageSourceIndex]}
+            alt={`Dokumentasi ${title}`}
+            loading="lazy"
+            onError={() => setImageSourceIndex((index) => index + 1)}
+          />
+        </button>
       ) : preview.type === 'embed' ? (
         <iframe
           src={preview.url}
@@ -99,7 +106,7 @@ function DocumentationPreview({ url, title }) {
   );
 }
 
-function DocumentationGallery({ documentation, title }) {
+function DocumentationGallery({ documentation, title, onImageClick }) {
   const links = (Array.isArray(documentation) ? documentation : [documentation])
     .filter((url) => typeof url === 'string' && url.trim() && !/^\[Ljava\.lang\.Object;@[\da-f]+$/i.test(url.trim()))
     .map((url) => getDocumentationImageUrl(url.trim()));
@@ -109,7 +116,12 @@ function DocumentationGallery({ documentation, title }) {
   return (
     <div className="experience-documentation-gallery">
       {links.map((url, index) => (
-        <DocumentationPreview key={`${url}-${index}`} url={url} title={`${title}, dokumentasi ${index + 1}`} />
+        <DocumentationPreview
+          key={`${url}-${index}`}
+          url={url}
+          title={`${title}, dokumentasi ${index + 1}`}
+          onImageClick={onImageClick}
+        />
       ))}
     </div>
   );
@@ -122,6 +134,23 @@ export default function ExperienceDetail() {
   const [experience, setExperience] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [selectedImage, setSelectedImage] = useState(null);
+
+  useEffect(() => {
+    if (!selectedImage) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setSelectedImage(null);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedImage]);
 
   useEffect(() => {
     let isMounted = true;
@@ -167,14 +196,28 @@ export default function ExperienceDetail() {
                 <span className="tag">{experience.date}</span>
                 <h1>{experience.title}</h1>
                 {experience.thumbnail && (
-                  <img
-                    className="achievement-detail-thumbnail"
-                    src={getDocumentationImageUrl(experience.thumbnail)}
-                    alt={`Thumbnail ${experience.title}`}
-                  />
+                  <button
+                    type="button"
+                    className="achievement-detail-thumbnail-button"
+                    onClick={() => setSelectedImage({
+                      url: getDocumentationImageUrl(experience.thumbnail),
+                      alt: `Thumbnail ${experience.title}`
+                    })}
+                    aria-label={`Perbesar thumbnail ${experience.title}`}
+                  >
+                    <img
+                      className="achievement-detail-thumbnail"
+                      src={getDocumentationImageUrl(experience.thumbnail)}
+                      alt={`Thumbnail ${experience.title}`}
+                    />
+                  </button>
                 )}
                 <p className="experience-detail-intro">{experience.detail || experience.description}</p>
-                <DocumentationGallery documentation={experience.documentation} title={experience.title} />
+                <DocumentationGallery
+                  documentation={experience.documentation}
+                  title={experience.title}
+                  onImageClick={(url, alt) => setSelectedImage({ url, alt })}
+                />
               </>
             ) : (
               <>
@@ -207,6 +250,7 @@ export default function ExperienceDetail() {
                       <DocumentationGallery
                         documentation={activity.documentation}
                         title={activity.title || 'kegiatan'}
+                        onImageClick={(url, alt) => setSelectedImage({ url, alt })}
                       />
                     </article>
                   ))}
@@ -217,6 +261,31 @@ export default function ExperienceDetail() {
           </article>
         )}
       </div>
+      {selectedImage && (
+        <div
+          className="image-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pratinjau gambar ukuran penuh"
+          onClick={() => setSelectedImage(null)}
+        >
+          <button
+            type="button"
+            className="image-lightbox-close"
+            onClick={() => setSelectedImage(null)}
+            aria-label="Tutup gambar"
+            autoFocus
+          >
+            <X size={24} />
+          </button>
+          <img
+            className="image-lightbox-image"
+            src={selectedImage.url}
+            alt={selectedImage.alt}
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      )}
     </main>
   );
 }

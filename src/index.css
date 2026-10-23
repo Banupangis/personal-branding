@@ -210,11 +210,26 @@ section:last-of-type { border-bottom: none; }
 
 .hero-content {
   min-height: 80vh;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  align-items: center;
+  gap: 64px;
   justify-content: center;
   padding-top: 120px;
   padding-bottom: 120px;
+}
+
+.hero-copy {
+  min-width: 0;
+}
+
+.hero-photo {
+  display: block  ;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  border-radius: 12px;
+  object-fit: cover;
+  object-position: center;
 }
 
 .hero-eyebrow {
@@ -427,6 +442,26 @@ section:last-of-type { border-bottom: none; }
   border: 0;
 }
 
+.experience-documentation-image-button,
+.achievement-detail-thumbnail-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.experience-documentation-image-button {
+  height: 100%;
+}
+
+.experience-documentation-image-button:focus-visible,
+.achievement-detail-thumbnail-button:focus-visible {
+  outline: 3px solid var(--color-orange);
+  outline-offset: 3px;
+}
+
 .experience-documentation-item.is-image {
   aspect-ratio: 4 / 3;
 }
@@ -454,6 +489,48 @@ section:last-of-type { border-bottom: none; }
 .experience-detail-empty {
   margin: 56px auto 0;
   max-width: 800px;
+}
+
+.image-lightbox {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px 24px;
+  background: rgba(0, 0, 0, 0.9);
+  cursor: zoom-out;
+}
+
+.image-lightbox-image {
+  display: block;
+  max-width: min(100%, 1600px);
+  max-height: 100%;
+  object-fit: contain;
+  cursor: default;
+}
+
+.image-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  cursor: pointer;
+}
+
+.image-lightbox-close:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
 }
 
 .admin-experience-panel {
@@ -744,8 +821,14 @@ section:last-of-type { border-bottom: none; }
 
   .hero-content {
     min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
     padding-top: 72px;
     padding-bottom: 72px;
+  }
+
+  .hero-photo {
+    display: none;
   }
 
   .hero-title {

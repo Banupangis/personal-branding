@@ -21,7 +21,7 @@ See [Supabase setup](./docs/supabase-setup.md) for the complete database, Auth, 
 - `npm run preview` — preview the production bundle locally.
 - `npm run lint` — run ESLint.
 
-There is no spreadsheet import. The new Supabase database starts empty; the existing built-in experience and achievement content remains as a fallback until updated or hidden through the admin panel.
+There is no spreadsheet import. The `20261023120000_seed_portfolio_content.sql` migration inserts the 11 experience and 3 achievement records formerly stored in `src/data/content.js`; Supabase is the source of truth for those collections.
 
 ## Experience documentation
 

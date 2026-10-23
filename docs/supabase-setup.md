@@ -1,6 +1,6 @@
 # Supabase Setup
 
-This guide configures a new Supabase database for the portfolio. The migration creates an empty schema; it does not import Google Sheets rows or seed portfolio content.
+This guide configures a new Supabase database for the portfolio. Migrations create the schema and load the experience and achievement content explicitly supplied from `content.js`; no Google Sheets rows are imported.
 
 ## Prerequisites
 
@@ -36,7 +36,7 @@ The initial migration creates:
 
 After applying the initial schema migration, also review and apply `supabase/migrations/20261023050000_experience_documentation_storage.sql`. It creates the public image bucket with a 5 MB limit and image MIME allowlist. Anonymous visitors may read images; only allowlisted admins may upload, update, or delete them. It does not remove or alter existing image records.
 
-No seed is provided. On a fresh database, built-in experience and achievement records in `src/data/content.js` remain visible as fallbacks; projects start empty. Admin changes and new records are stored in Supabase.
+Apply `supabase/migrations/20261023100000_achievement_details_and_images.sql` to add achievement image/detail fields and its Storage bucket. Then apply `supabase/migrations/20261023120000_seed_portfolio_content.sql` to insert the 11 experiences and 3 achievements formerly embedded in `src/data/content.js`. It uses stable IDs and `ON CONFLICT` updates; rerunning it restores those rows to the values in the migration. Projects start empty. Admin changes and new records are stored in Supabase.
 
 ## Provision the first administrator
 
@@ -84,7 +84,7 @@ The repository does not currently provide a test script or local Supabase config
 - **Permission denied in `/admin`:** confirm the user is signed in and the exact Auth UUID is present in `public.admin_users`. Do not loosen the RLS policies.
 - **Migration or missing relation error:** confirm the reviewed migration was applied to the intended empty project and that the SQL Editor reported success.
 - **Admin is rejected after sign-in:** check the `is_admin` RPC in the SQL Editor and verify the user UUID. Only the allowlist row should be changed through a trusted channel.
-- **Public lists are empty:** this is expected for projects on a fresh database. Experiences and achievements use source-code fallback content until changed or hidden; no spreadsheet rows are imported.
+- **Experience or achievement lists are empty:** confirm `20261023120000_seed_portfolio_content.sql` was applied after the schema and achievement-detail migrations. No spreadsheet rows are imported.
 
 ## Manual actions still required
 

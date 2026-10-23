@@ -16,8 +16,8 @@
 | --- | --- | --- |
 | `portfolio/src/data/projectsApi.js` | Reads a hard-coded Apps Script Web App endpoint | Lists projects; validates the response is an array. |
 | `portfolio/src/components/AdminDashboard.jsx` | Posts directly to the same endpoint | Creates, updates, and deletes projects. |
-| `portfolio/src/data/experienceApi.js` | Reads `?type=experiences`; posts action payloads to the endpoint | Reads and merges experiences with the built-in `EXPERIENCE` list; saves/deletes experiences. Tracks deleted built-in IDs in the remote response. |
-| `portfolio/src/data/achievementsApi.js` | Reads `?type=achievements`; posts action payloads to the endpoint | Reads and merges achievements with built-in `ACHIEVEMENTS`; saves/deletes achievements and tracks deleted built-in IDs in the remote response. |
+| `portfolio/src/data/experienceApi.js` | Reads `?type=experiences`; posts action payloads to the endpoint | Previously merged remote experiences with the built-in `EXPERIENCE` list; saved/deleted experiences and tracked hidden built-in IDs. |
+| `portfolio/src/data/achievementsApi.js` | Reads `?type=achievements`; posts action payloads to the endpoint | Previously merged remote achievements with built-in `ACHIEVEMENTS`; saved/deleted achievements and tracked hidden built-in IDs. |
 | `portfolio/src/components/AdminDashboard.jsx` | Calls the three data APIs | Admin lists and CRUD forms for all three content types. |
 | `portfolio/src/components/Projects.jsx` | Calls `fetchProjects()` | Public project list. |
 | `portfolio/src/components/Experience.jsx` | Calls `fetchExperiences()` | Public experience list. |
@@ -30,9 +30,9 @@ The Google Docs/Drive links in `detail.jsx` are presentation/preview URLs, not d
 ### Data entities and observed fields
 
 - **Project:** `id`, `title`, `category`, `description`, `status`, `thumbnail`, `githubLink`, `demoLink`. Project data is initially empty in `content.js`.
-- **Experience:** built-in records have `id`, `organization`, `role`, `date`, `description`, `contributions`, and `link`. The admin also stores `detail` and `activities`; each activity has `id`, `title`, `description`, and one or more `documentation` URLs.
-- **Achievement:** `id`, `title`, `date`, and `description`.
-- Existing code merges remote experience/achievement records over built-in records and uses remote deleted-ID lists to suppress deleted built-ins. Preserve or intentionally replace this behavior when designing the fresh-database model.
+- **Experience:** records formerly embedded in `content.js` have `id`, `organization`, `role`, `date`, `description`, `contributions`, and `link`. The admin also stores `detail` and `activities`; each activity has `id`, `title`, `description`, and one or more documentation image references.
+- **Achievement:** records formerly embedded in `content.js` have `id`, `title`, `date`, and `description`; admin storage also supports detail, thumbnail, and documentation images.
+- At audit time, existing code merged remote experience/achievement records over built-in records and used remote deleted-ID lists to suppress deleted built-ins. This fallback has now been replaced by explicit SQL seed records; all list reads come from Supabase.
 
 The README describes legacy sheet names and some columns, but the actual Apps Script source and a schema export are absent. Spreadsheet rows must not be imported under the selected fresh-database strategy.
 
@@ -50,12 +50,12 @@ The README describes legacy sheet names and some columns, but the actual Apps Sc
 | Existing content | Supabase model | Notes |
 | --- | --- | --- |
 | Projects | `projects` | Store observed fields with a text primary key; public `SELECT`, writes restricted to allowlisted admins. |
-| Experiences | `experiences` and `experience_activities` | Store contributions and documentation image references as PostgreSQL text arrays; activities reference their experience with `ON DELETE CASCADE`. Activities retain an explicit display order. Uploaded images use a public Supabase Storage bucket with admin-only writes. |
-| Achievements | `achievements` | Store observed fields with a text primary key; top-level additions are ordered by creation time. |
-| Built-in experience/achievement suppression | `hidden_default_content` | Store only the entity type and ID needed to hide a source-code fallback entry; public read, admin-only writes. |
+| Experiences | `experiences` and `experience_activities` | Store the 11 former source records and activity details in PostgreSQL; documentation image references are arrays. Activities reference their experience with `ON DELETE CASCADE` and retain explicit display order. Uploaded images use a public Supabase Storage bucket with admin-only writes. |
+| Achievements | `achievements` | Store the 3 former source records with detail/image fields; top-level additions are ordered by creation time. |
+| Built-in experience/achievement suppression | `hidden_default_content` | Retained in schema for compatibility; the app now reads all records from Supabase and no longer uses source-code fallbacks. |
 | Admin authorization | `admin_users` | Map explicitly approved Supabase Auth user UUIDs; no public API access. |
 
-No historical spreadsheet rows will be imported. Built-in experience and achievement entries in `src/data/content.js` remain as application fallbacks rather than being copied into SQL seed data.
+No historical spreadsheet rows will be imported. The user explicitly requested moving the 11 supplied experience records and 3 achievement records from `src/data/content.js` into an idempotent SQL migration. The corresponding JavaScript constants have been removed, so the database is now the source of truth for both collections.
 
 ## Implemented locally
 
@@ -63,17 +63,18 @@ The user selected Supabase Auth with an explicit admin allowlist, retaining brow
 
 1. Uses one centralized Supabase client and only public Vite environment variables, with a clear missing-configuration error.
 2. Adds migrations for the observed entities, constraints, indexes, RLS, allowlist-based authorization, transactional nested-content RPCs, and admin-only image uploads to public Storage.
-3. Replaces runtime Apps Script CRUD with Supabase services while retaining the built-in experience/achievement fallback behavior.
+3. Replaces runtime Apps Script CRUD with Supabase services and loads experiences/achievements from Supabase only.
 4. Protects `/admin` with password sign-in and an `is_admin` database check. Sign-up is not provided.
 5. Replaces activity documentation link entry with image uploads to Supabase Storage. The public bucket allows only image formats up to 5 MB; reads are public and writes require an allowlisted admin. Existing legacy documentation links remain viewable until removed.
 6. Adds `.env.example`, ignores local environment files, and documents fresh-project setup. The spreadsheet and Apps Script deployment have not been changed.
-7. Leaves applying migrations and testing Storage upload/CRUD/RLS against a disposable Supabase project as manual, unverified steps.
+7. Adds an idempotent content migration for the former 11 experience and 3 achievement entries. Leaves applying migrations and testing Storage upload/CRUD/RLS against a disposable Supabase project as manual, unverified steps.
 
 ### Files added or updated
 
 - Added `portfolio/src/lib/supabaseClient.js` and updated all three data APIs and `AdminDashboard.jsx`.
 - Added `portfolio/supabase/migrations/20261022233300_initial_portfolio_schema.sql`.
 - Added `portfolio/supabase/migrations/20261023050000_experience_documentation_storage.sql` for the public documentation image bucket and admin-only writes.
+- Added `portfolio/supabase/migrations/20261023120000_seed_portfolio_content.sql` for the 11 experience and 3 achievement records removed from `content.js`.
 - Added `portfolio/.env.example` and `portfolio/docs/supabase-setup.md`; updated `portfolio/.gitignore`, `portfolio/README.md`, `portfolio/package.json`, and `portfolio/package-lock.json`.
 - Updated this migration plan with audit results and implementation status.
 
