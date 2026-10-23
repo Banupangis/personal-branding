@@ -335,6 +335,28 @@ section:last-of-type { border-bottom: none; }
 .experience-link {
   display: block;
   color: inherit;
+  
+}
+
+.experience-link.has-thumbnail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  align-items: center;
+  gap: 24px;
+}
+
+.experience-link-content {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.experience-card-thumbnail {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 8px;
+  object-fit: cover;
 }
 
 .experience-link:focus-visible,
@@ -895,6 +917,15 @@ section:last-of-type { border-bottom: none; }
 
   .experience-documentation-gallery {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .experience-link.has-thumbnail {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .experience-card-thumbnail {
+    max-height: 240px;
   }
 
   .admin-form-grid {
