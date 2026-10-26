@@ -1,7 +1,12 @@
 import { CONTACT } from '../data/content';
 import { FileText, Mail, Phone } from 'lucide-react';
+import { normalizeProfileLink } from '../data/profileLinks';
 
 export default function Contact() {
+  const githubUrl = normalizeProfileLink(CONTACT.github);
+  const linkedinUrl = normalizeProfileLink(CONTACT.linkedin);
+  const cvUrl = normalizeProfileLink(CONTACT.cv);
+
   return (
     <section id="contact" style={{ backgroundColor: 'var(--color-dark-blue)', color: '#FFFFFF' }}>
       <div className="container contact-content">
@@ -19,18 +24,18 @@ export default function Contact() {
               <Phone size={18} /> {CONTACT.phone}
             </a>
           )}
-          {CONTACT.github && (
-            <a href={CONTACT.github} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ borderColor: 'var(--color-light-blue)', color: 'var(--color-light-blue)' }}>
+          {githubUrl && (
+            <a href={githubUrl} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ borderColor: 'var(--color-light-blue)', color: 'var(--color-light-blue)' }}>
               GitHub
             </a>
           )}
-          {CONTACT.linkedin && (
-            <a href={CONTACT.linkedin} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ borderColor: 'var(--color-light-blue)', color: 'var(--color-light-blue)' }}>
+          {linkedinUrl && (
+            <a href={linkedinUrl} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ borderColor: 'var(--color-light-blue)', color: 'var(--color-light-blue)' }}>
               LinkedIn
             </a>
           )}
-          {CONTACT.cv && (
-            <a href={CONTACT.cv} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ borderColor: 'var(--color-light-blue)', color: 'var(--color-light-blue)' }}>
+          {cvUrl && (
+            <a href={cvUrl} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ borderColor: 'var(--color-light-blue)', color: 'var(--color-light-blue)' }}>
               <FileText size={18} /> Unduh CV
             </a>
           )}
